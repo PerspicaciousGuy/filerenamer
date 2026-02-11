@@ -48,10 +48,12 @@ def clean_filename(filename: str) -> str:
 
     name, ext = filename.rsplit(".", 1)
 
-    # Remove junk tokens with safe boundaries
+    # Treat _, -, space, comma, dot as separators
+    separators = r"[_\-\s,\.]"
+
     for token in BAD_TOKENS:
         name = re.sub(
-            rf"(^|[_\-\s]){re.escape(token)}([_\-\s]|$)",
+            rf"(^|{separators}){re.escape(token)}(?={separators}|$)",
             " ",
             name,
             flags=re.IGNORECASE
@@ -59,6 +61,9 @@ def clean_filename(filename: str) -> str:
 
     # Replace underscores with spaces
     name = name.replace("_", " ")
+
+    # Remove leftover punctuation-only fragments
+    name = re.sub(r"[,\.\-]+", " ", name)
 
     # Normalize spaces
     name = re.sub(r"\s+", " ", name).strip()
