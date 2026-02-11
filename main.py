@@ -48,22 +48,22 @@ def clean_filename(filename: str) -> str:
 
     name, ext = filename.rsplit(".", 1)
 
-    # 1️⃣ Remove junk tokens FIRST
+    # Remove junk tokens with safe boundaries
     for token in BAD_TOKENS:
         name = re.sub(
-            rf"\b{re.escape(token)}\b",
-            "",
+            rf"(^|[_\-\s]){re.escape(token)}([_\-\s]|$)",
+            " ",
             name,
             flags=re.IGNORECASE
         )
 
-    # 2️⃣ Replace underscores
+    # Replace underscores with spaces
     name = name.replace("_", " ")
 
-    # 3️⃣ Normalize spaces
+    # Normalize spaces
     name = re.sub(r"\s+", " ", name).strip()
 
-    # 4️⃣ Append personal tag
+    # Append personal tag
     name = f"{name} - {PERSONAL_TAG}"
 
     return f"{name}.{ext}"
