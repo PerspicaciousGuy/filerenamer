@@ -1,6 +1,8 @@
 import os
 import re
+import io
 import threading
+
 from fastapi import FastAPI
 import uvicorn
 
@@ -12,34 +14,41 @@ from telegram.ext import (
     filters
 )
 
-# ---------------- HTTP SERVER (Koyeb requirement) ----------------
+# ---------------- HTTP SERVER (Render requirement) ----------------
 
-app = FastAPI()
+web_app = FastAPI()
 
-@app.get("/")
+@web_app.get("/")
 def health():
     return {"status": "ok"}
 
 def start_http():
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 10000))  # Render default
+    uvicorn.run(web_app, host="0.0.0.0", port=port)
 
-# ---------------- TELEGRAM BOT ----------------
+# ---------------- BOT CONFIG ----------------
 
 BAD_TOKENS = [
-    "zlib", "z_library", "z-library",
-    "1lib", "libgen", "pdfdrive", "sk"
+    "zlib",
+    "z_library",
+    "z-library",
+    "1lib",
+    "libgen",
+    "pdfdrive",
+    "sk"
 ]
 
 PERSONAL_TAG = "@ebookguy"
+
+# ---------------- FILENAME CLEANER ----------------
 
 def clean_filename(filename: str) -> str:
     if "." not in filename:
         return filename
 
     name, ext = filename.rsplit(".", 1)
-    name = name.replace("_", " ")
 
+    # 1️⃣ Remove junk tokens FIRST
     for token in BAD_TOKENS:
         name = re.sub(
             rf"\b{re.escape(token)}\b",
@@ -48,36 +57,54 @@ def clean_filename(filename: str) -> str:
             flags=re.IGNORECASE
         )
 
+    # 2️⃣ Replace underscores
+    name = name.replace("_", " ")
+
+    # 3️⃣ Normalize spaces
     name = re.sub(r"\s+", " ", name).strip()
+
+    # 4️⃣ Append personal tag
     name = f"{name} - {PERSONAL_TAG}"
 
     return f"{name}.{ext}"
 
+# ---------------- DOCUMENT HANDLER ----------------
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     doc = message.document
+
     new_name = clean_filename(doc.file_name)
 
-    file = await doc.get_file()
+    # Download file into memory
+    tg_file = await doc.get_file()
+    buffer = io.BytesIO()
+    await tg_file.download_to_memory(out=buffer)
+    buffer.seek(0)
+
+    # Re-upload with new filename
     await message.reply_document(
-        document=file.file_id,
+        document=buffer,
         filename=new_name
     )
 
+    # Delete original ONLY in channels
     if message.chat.type == "channel":
         try:
             await message.delete()
         except Exception:
             pass
 
+# ---------------- BOT START ----------------
+
 def start_bot():
     token = os.environ.get("BOT_TOKEN")
     if not token:
-        raise RuntimeError("BOT_TOKEN missing")
+        raise RuntimeError("BOT_TOKEN environment variable is missing")
 
-    app_bot = ApplicationBuilder().token(token).build()
-    app_bot.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app_bot.run_polling()
+    app = ApplicationBuilder().token(token).build()
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.run_polling()
 
 # ---------------- ENTRY POINT ----------------
 
