@@ -1,32 +1,25 @@
 import os
 import re
 import io
-import threading
 
-from fastapi import FastAPI
-import uvicorn
-
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
-# ---------------- HTTP SERVER (Render requirement) ----------------
+# ---------------- CONFIG ----------------
 
-web_app = FastAPI()
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN missing")
 
-@web_app.get("/")
-def health():
-    return {"status": "ok"}
-
-def start_http():
-    port = int(os.environ.get("PORT", 10000))  # Render default
-    uvicorn.run(web_app, host="0.0.0.0", port=port)
-
-# ---------------- BOT CONFIG ----------------
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Provided by Render
+if not RENDER_URL:
+    raise RuntimeError("RENDER_EXTERNAL_URL missing")
 
 BAD_TOKENS = [
     "zlib",
@@ -40,15 +33,18 @@ BAD_TOKENS = [
 
 PERSONAL_TAG = "@ebookguy"
 
-# ---------------- FILENAME CLEANER ----------------
+# ---------------- FASTAPI ----------------
+
+app = FastAPI()
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+
+# ---------------- FILENAME CLEANING ----------------
 
 def clean_filename(filename: str) -> str:
     if "." not in filename:
         return filename
 
     name, ext = filename.rsplit(".", 1)
-
-    # Treat _, -, space, comma, dot as separators
     separators = r"[_\-\s,\.]"
 
     for token in BAD_TOKENS:
@@ -59,21 +55,16 @@ def clean_filename(filename: str) -> str:
             flags=re.IGNORECASE
         )
 
-    # Replace underscores with spaces
     name = name.replace("_", " ")
-
-    # Remove leftover punctuation-only fragments
     name = re.sub(r"[,\.\-]+", " ", name)
-
-    # Normalize spaces
     name = re.sub(r"\s+", " ", name).strip()
 
-    # Append personal tag
-    name = f"{name} - {PERSONAL_TAG}"
+    if PERSONAL_TAG.lower() not in name.lower():
+        name = f"{name} - {PERSONAL_TAG}"
 
     return f"{name}.{ext}"
 
-# ---------------- DOCUMENT HANDLER ----------------
+# ---------------- HANDLER ----------------
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -81,38 +72,49 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     new_name = clean_filename(doc.file_name)
 
-    # Download file into memory
     tg_file = await doc.get_file()
     buffer = io.BytesIO()
     await tg_file.download_to_memory(out=buffer)
     buffer.seek(0)
 
-    # Re-upload with new filename
     await message.reply_document(
         document=buffer,
         filename=new_name
     )
 
-    # Delete original ONLY in channels
     if message.chat.type == "channel":
         try:
             await message.delete()
         except Exception:
             pass
 
-# ---------------- BOT START ----------------
+telegram_app.add_handler(
+    MessageHandler(filters.Document.ALL, handle_document)
+)
 
-def start_bot():
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        raise RuntimeError("BOT_TOKEN environment variable is missing")
+# ---------------- WEBHOOK ENDPOINT ----------------
 
-    app = ApplicationBuilder().token(token).build()
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.run_polling()
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
 
-# ---------------- ENTRY POINT ----------------
+@app.get("/")
+@app.head("/")
+async def health():
+    return {"status": "ok"}
 
-if __name__ == "__main__":
-    threading.Thread(target=start_http).start()
-    start_bot()
+# ---------------- STARTUP ----------------
+
+@app.on_event("startup")
+async def on_startup():
+    await telegram_app.initialize()
+    await telegram_app.bot.set_webhook(
+        url=f"{RENDER_URL}/webhook"
+    )
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await telegram_app.shutdown()
