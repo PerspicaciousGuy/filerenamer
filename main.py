@@ -17,10 +17,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Provided by Render
-if not RENDER_URL:
-    raise RuntimeError("RENDER_EXTERNAL_URL missing")
-
 BAD_TOKENS = [
     "zlib",
     "z_library",
@@ -33,12 +29,12 @@ BAD_TOKENS = [
 
 PERSONAL_TAG = "@ebookguy"
 
-# ---------------- FASTAPI ----------------
+# ---------------- APP INIT ----------------
 
 app = FastAPI()
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# ---------------- FILENAME CLEANING ----------------
+# ---------------- CLEAN FILENAME ----------------
 
 def clean_filename(filename: str) -> str:
     if "." not in filename:
@@ -92,7 +88,7 @@ telegram_app.add_handler(
     MessageHandler(filters.Document.ALL, handle_document)
 )
 
-# ---------------- WEBHOOK ENDPOINT ----------------
+# ---------------- WEBHOOK ----------------
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -109,12 +105,17 @@ async def health():
 # ---------------- STARTUP ----------------
 
 @app.on_event("startup")
-async def on_startup():
+async def startup():
     await telegram_app.initialize()
+
+    render_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not render_url:
+        raise RuntimeError("RENDER_EXTERNAL_URL missing")
+
     await telegram_app.bot.set_webhook(
-        url=f"{RENDER_URL}/webhook"
+        url=f"{render_url}/webhook"
     )
 
 @app.on_event("shutdown")
-async def on_shutdown():
+async def shutdown():
     await telegram_app.shutdown()
